@@ -2,6 +2,7 @@
 #
 # $Id$
 #
+# JAPAN/MARCレコードを読んで、１レコード１ファイル形式にする。
 
 use strict;
 use Convert::EBCDIC;
@@ -20,7 +21,7 @@ sub debug_print($) {
 }
 
 # JIS X 0208 漢字をエスケープコードを含めて返す。
-# 同時に、外字の処理も行なう。
+# 同時に、（適当な）外字の処理も行なう。
 sub escape_kanji($) {
     my ($data) = @_;
     
