@@ -1,428 +1,520 @@
-/*
-	ＪＭＡＲＣフォーマットを読むプログラム
-	第３版  うりゃーと１レコードを全部読み取ってディレクトリ情報に忠実に
-		フィールドを再現するバージョン
+#include <stdio.h>
+#include <stdlib.h>
+#include <strings.h>
+#include <string.h>
+#include "dict.h"
 
-cc -o jmarcfilter jmarcfilter.c; strip jmarcfilter
-cat @JMARC1 | jmarcfilter | less
+#define DEBUG 0 /* デバックする時は 1 に */
+#define ANZAI 0 /* 安斎作jmarcfilter風の出力にするときは1*/
 
-	Hiroyuki Anzai    June, 1 1994
+#define BUF_SIZE 1024
+#define LABEL_LENGTH 24
+#define N 30
+#define JPMARC_RS '\x1d' /* レコードセパレータ */
+#define JPMARC_FS '\x1e' /* フィールドセパレータ */
+#define JPMARC_SF '\x1f' /* サブフィールド識別子の最初の文字 */
+#define JISC6226_ESC "\x1b\x24\x40" /* 2バイト文字エスケープシーケンス */
+#define ASCII_ESC "\x1b\x28\x42" /* 1バイト文字エスケープシーケンス */
+#define GAIJINUM 11 /* 外字の数 */
+#define REPLACE_STR "\x21\x21" /* "　" 外字辞書にない外字 */
+/*#define REPLACE_STR "\x22\x2e" *//* "〓" 外字辞書にない外字 */
 
-*/
+/* エントリ */
+struct entry {
+    char field[4]; /* フィールド識別子 （例: 001, 245 など） */
+    int len; /* フィールド長 データフィールドの長さ FS含む */
+    int addr; /* フィールドの先頭文字の位置
+	          データフィールド群の先頭からの相対位置*/
+};
+/* サブデータフィールド*/
+struct subdatafield {
+    /* サブフィールド識別子 */
+    char id; /* サブフィールド識別文字 （例: A,B,D,Xなど）*/
+    int datalen; /* データ部の長さ */
+    int mode; /* データ部のモード （1:ASCII or 2:JIS） */
+    
+    /* データ（部）  */
+    char data[BUF_SIZE]; /* 実際のデータ （例: JP, 東京 など）*/
+};
+    
+/* データフィールド */
+struct datafield {
+    int num; /* データフィールド内にあるサブデータフィールドの数 */
+    struct subdatafield sub[N]; /* サブデータフィールドの配列 */
+};
 
+/* ディレクトリ */
+struct directory {
+    struct entry* e; /* エントリ */
+};
 
-#include<stdio.h>
-#include<stdlib.h>
-#include<string.h>
-#include<ctype.h>
-#define TRUE 1
-#define UTC 0x1f		/* delimiter */
-#define FTC 0x1e		/* field terminator */
-#define RTC 0x1d		/* record terminator */
-#include "header.h"		/* print format */
+/* データフィールド群 */
+struct datafieldgroup {
+    struct datafield* d; /* データフィールド */
+};
 
-static char *EBCDIC[257] = {
-	"NUL","@@", "@@", "@@", "@@", "@@", "@@", "@@",
-	"@@", "@@", "@@", "@@", "@@", "@@", "@@", "@@",
-	"@@", "@@", "@@", "@@", "@@", "@@", "@@", "@@",
-	"@@", "@@", "@@", "@@", "@@", "RS", "#",  "$" ,
-	"@@", "@@", "@@", "@@", "@@", "@@", "@@", "@@",
-	"@@", "@@", "@@", "@@", "@@", "@@", "@@", "@@",
-	"@@", "@@", "@@", "@@", "@@", "@@", "@@", "@@",
-	"@@", "@@", "@@", "@@", "@@", "@@", "@@", "@@",
-	" ",  "@@", "@@", "@@", "@@", "@@", "@@", "@@",
-	"@@", "@@", "[",  ".",  "<",  "(",  "+",  "|" ,
-	"&",  "@@", "@@", "@@", "@@", "@@", "@@", "@@",
-	"@@", "@@", "]",  "\\", "*",  ")",  ";",  "^" ,
-	"-",  "/",  "@@", "@@", "@@", "@@", "@@", "@@",
-	"@@", "@@", "|",  ",",  "%",  "_",  ">",  "?" ,
-	"@@", "@@", "@@", "@@", "@@", "@@", "@@", "@@",
-	"@@", "'",  ":",  "#",  "@",  "`",  "=",  "\"",
-	"@@", "a",  "b",  "c",  "d",  "e",  "f",  "g" ,
-	"h",  "i",  "@@", "@@", "@@", "@@", "@@", "@@",
-	"@@", "j",  "k",  "l",  "m",  "n",  "o",  "p" ,
-	"q",  "r",  "@@", "@@", "@@", "@@", "@@", "@@",
-	"@@", "-",  "s",  "t",  "u",  "v",  "w",  "x" ,
-	"y",  "z",  "@@", "@@", "@@", "@@", "@@", "@@",
-	"@@", "@@", "@@", "@@", "@@", "@@", "@@", "@@",
-	"@@", "@@", "@@", "@@", "@@", "@@", "@@", "@@",
-	"{",  "A",  "B",  "C",  "D",  "E",  "F",  "G" ,
-	"H",  "I",  "@@", "@@", "@@", "@@", "@@", "@@",
-	"}",  "J",  "K",  "L",  "M",  "N",  "O",  "P" ,
-	"Q",  "R",  "@@", "@@", "@@", "@@", "@@", "@@",
-	"$",  "@@", "S",  "T",  "U",  "V",  "W",  "X" ,
-	"Y",  "Z",  "@@", "@@", "@@", "@@", "@@", "@@",
-	"0",  "1",  "2",  "3",  "4",  "5",  "6",  "7" ,
-	"8",  "9",  "@@", "@@", "@@", "@@", "@@", "EO"};
+/* 書誌レコード */
+struct record {
+    int num; /* 書誌レコード内にあるエントリやデータフィールドの数 */
+    char label[LABEL_LENGTH+1];  /* レコードラベル */
+    struct directory dir;     /* ディレクトリ */
+    struct datafieldgroup data; /* データフィールド群 */
+};
 
-void kanjishift(void);
-void ascshift(void);
-char *strmid(char *s1, int n);
-void ebc2jis(char *st);
-void putcode(int s1);
-void putkanji(char *st, int len);
-void putfield(char *s1, int n, char *tagtemp);
-void puteuc(char *st);
-
-main(int argc, char *argv[])
+void print_record (struct record rec);
+char* get_datafieldgroup (char* datafieldgroup, char label[], FILE* fp);
+int search (char key[], char *db[], int n);
+void realchange (char str[], int len);
+struct datafield get_001datafield (char datafield_str[]);
+struct subdatafield get_subfield (int addr, char datafield_str[]);
+struct datafield get_otherdatafield (char datafield_str[], struct entry e);
+void  kanji (char str[]);
+void  escape_kanji (char str[]);
+int search_otergaiji (char str[]);
+int get_label (char label[], FILE *fp);
+void ebcdic2ascii (char label[]);
+int get_length (char label[]);
+char* get_dir (char* directory, int dir_lenght, FILE *fp);
+int get_dirlen (char label[]); /* ディレクトリの長さを返す */
+struct entry get_direntry (char* directory, int num);
+struct datafield get_datafield (char* data, struct entry e);
+void substr (char str1[], char str2[], int head, int len);
+int get_baseaddr (char label[]);
+void print_data (struct entry e, struct datafield d);
+int main (int argc, char* argv[])
 {
-	int reclen, i, j, k, n, fieldlen, basebase, baseadd, fieldcnt, cntmax;
-	char *buf, *marc, *c, *leader, *temp, *tag[100], *dataelement[100];
-	char field[5], address[5];
-	char UT[1], FT[1], RT[1];
-	sprintf(UT, "%c", UTC);
-	sprintf(FT, "%c", FTC);
-	sprintf(RT, "%c", RTC);
-	c = (char *)malloc(sizeof(char)*1);
-	buf = (char *)malloc(sizeof(char)*13);
-	temp = (char *)malloc(sizeof(char)*6);
-	leader = (char *)malloc(sizeof(char)*25);
-	if ((buf == NULL) || (c == NULL) || (leader == NULL) || (temp == NULL))
-		{
-		printf("Memory shortage!\n");
-		exit(1);
-		}
-	/*
-	printf("%d %s %s\n", argc, argv[0], argv[1]);
-	exit(0);
-	*/
-	if (argc == 2) cntmax = atoi(argv[1]);
-		else cntmax = 99999;
-
-/* getting MARC RECORDS (MAIN LOOP) */
-while(TRUE){
-	++n;
-	if (RECORDNUMBER) 
-  		printf("\nRecord : %4d  ", n);
-
-	/* READING 5 chars (Record Length) */
-	strcpy(buf, "");
-	for(i = 0; i < 5; i++){
-		*c = getchar();
-		if (*c == EOF) goto EndFile;
-		strcat(buf, c);
-		}
-
-	strcpy(temp, buf);
-	ebc2jis(buf);
-	reclen = atoi(buf);
-	if (RECLEN)
-		printf("(RECORD LENGTH %d)\n", reclen);
-	marc = (char *)malloc(sizeof(char)*(reclen + 1));
-	if (marc == NULL){
-		printf("\nCANT malloc for MARC RECORD!\n");
-		exit(1);
-		}
-	strcpy(marc, temp);
-	i = 5;
-
-	/* Reading data for 6 - rellen chars */
-	while(TRUE){
-		if ((*c = getchar()) == EOF) goto EndFile;
-		strcat(marc, c);
-		if ((++i) == reclen) break;
-		}
-
-	/* READING Leader block */
-	strncpy(leader, marc, 24);
-	strcpy(leader+24, "\0");
-	ebc2jis(leader);
-	if (PRINTLEADER)
-		printf(LEADERFORM, leader);
-
-	/* READING Directory block and data element */
-	basebase = strcspn(marc, FT) + 1;
-	i = basebase - 25;	/* leader 24 chars */
-	fieldcnt = i / 12;
-	for(i = 0; i < fieldcnt; i++){
-		strcpy(buf, "");
-		k = 25 + 12*i;
-		strncpy(buf, strmid(marc, k), 12);
-		strcpy(buf+12, "\0");
-		ebc2jis(buf);
-		tag[i] = (char *)malloc(sizeof(char)*4);
-		if (tag[i] == NULL) exit(1);
-		strncpy(tag[i], buf, 3);
-		strcpy(tag[i]+3, "\0");
-		strncpy(field, strmid(buf,4), 4);
-		fieldlen = atoi(field);
-		strncpy(address, strmid(buf,8), 5);
-		strcpy(address+5, "\0");
-		baseadd = atoi(address) + basebase;
-		dataelement[i] = (char *)malloc(sizeof(char)*(fieldlen+1));
-		if (dataelement[i] == NULL) exit(1);
-		strncpy(dataelement[i], strmid(marc, baseadd) +1, fieldlen);
-		strcpy(dataelement[i]+fieldlen, "\0");
-#if defined(USEGOLIST)
-		if ((PRINTTAG) && (strstr(GOLISTTAG, tag[i]) != NULL))
-			printf(TAGFORM, tag[i]);
-#endif
-#if !defined(USEGOLIST)
-		if (PRINTTAG != NULL)
-			printf(TAGFORM, tag[i]);
-#endif
-		if (strncmp(tag[i], "001", 3) == 0) {
-			ebc2jis(dataelement[i]);
-			strcpy(dataelement[i]+8, "\0");
-			if (TAG001)
-				printf(TAG001FORM, dataelement[i]);
-			}
-		else putfield(dataelement[i], fieldlen, tag[i]);	
+    int i;
+    FILE *fp;
+    char* directory;             /* ディレクトリ */
+    char* datafieldgroup;        /* データフィールド群 */
+    struct record rec;           /* 書誌レコード */
+    
+    if (argc < 2) {
+	printf("USAGE: %s file ...\n", argv[0]);
+	exit(EXIT_FAILURE);
+    }
+    for (i = 1; i < argc; i++) {
+	/*ファイルのオープン*/
+	if ((fp = fopen(argv[i], "r")) == NULL) { 
+	    perror("fopen");
+	    exit(EXIT_FAILURE);
 	}
+	while(1) {
+	     /* レコードラベルの取得 */
+	    if (get_label(rec.label, fp) != LABEL_LENGTH) {
+		/* レコードラベルの取得に失敗したら終了 */
+		break;
+	    }
+	    /* ディレクトリの取得 */
+	    directory = get_dir(directory, get_dirlen(rec.label), fp);
+	    
+	    /* データフィールド群の取得 */
+	    datafieldgroup = get_datafieldgroup(datafieldgroup, rec.label, fp);
 
-	strncpy(buf, strmid(marc, baseadd) + fieldlen + 1, 1);
-	strcpy(buf+1, "\0");
-
-	/* check Record Terminator */
-	if (strncmp(buf, RT,1) != 0) {
-		printf("Where is record teminator? %s Good-bye.\n", buf);
-		exit(1);
-		}
-	printf(RECORD_T);
-
-	/* free memory */
-	for(i = fieldcnt -1; i >= 0; i--){
-		free(tag[i]);
-		free(dataelement[i]);
-		}
-	free(marc);
-	if (n == cntmax) exit(0);
-
-	}	/* this is the end of while loop */
-
-/* End of File */
-EndFile:
-	/*puts("End of File.");*/
-	exit(0);
-}		/* this is the end of program function MAIN */
-
-
-void kanjishift(void)
+	    /* 書誌レコードの初期化 */
+	    rec.num = get_dirlen(rec.label) / 12;
+	    rec.dir.e =  malloc(sizeof(struct entry) * rec.num);
+	    rec.data.d =  malloc(sizeof(struct datafield) * rec.num);
+	    
+	    for (i = 0; i < rec.num; i++){
+		/* エントリの取得 */
+		rec.dir.e[i] = get_direntry(directory, i);
+		/* データフィールドの取得 */
+		rec.data.d[i] = get_datafield(datafieldgroup, rec.dir.e[i]);
+	    }
+	    
+	    /* 出力 */
+	    print_record(rec);
+	    
+	    free(rec.dir.e);
+	    free(rec.data.d);
+	    free(directory);
+	    free(datafieldgroup);
+	}
+	fclose(fp);
+    }
+    exit(EXIT_SUCCESS);
+}
+/* 書誌レコードを出力 */
+void print_record (struct record rec)
 {
-	putchar(27);
-	putchar(36);					/* shift code */
-	putchar(64);					/* ESC $ @    */
+    int i;
+#if ANZAI == 0    
+    /* レコードラベルの出力 */
+    printf("%s\n\n", rec.label);
+#endif
+    for (i = 0; i < rec.num; i++){
+    	/* エントリとデータフィールドを出力 */
+	print_data(rec.dir.e[i], rec.data.d[i]);
+    }
+    printf("\n");
+}
+/* レコードラベルを文字列としてlabelに取得 */
+int get_label (char label[], FILE *fp)
+{
+    int label_length;
+    label_length = fread(label, sizeof(char), LABEL_LENGTH, fp);
+    label[24] = '\0';
+    ebcdic2ascii(label);
+    return label_length;
 }
 
-void ascshift(void)
+/* データフィールド群の先頭位置を返す
+ * 書誌レコードの先頭からのバイト数 */
+int get_baseaddr (char label[])
 {
-	putchar(27);
-	putchar(40);					/* shift code */
-	putchar(66);					/* ESC ( B    */
+    char buf[BUF_SIZE];
+    substr(buf, label, 12, 5);
+    return atoi(buf);   
 }
 
-void ebc2jis(char *st)
+/* ディレクトリの長さを取得 */
+int get_dirlen (char label[])
 {
-	int c, i, n;
-	char s[1];
-	n = strcspn(st, "\0\n");
-	for(i = 0; i < n; i ++){
-		strncpy(s, st + i, 1);
-		c = (int)s[0];
-		c = (c & 0x000000ff);
-		strncpy(st+i, EBCDIC[c], 1);
-		}
-	strcpy(st+n, "\0");
+    return get_baseaddr(label) - LABEL_LENGTH;
 }
 
-char *strmid(char *s1, int n)
+/* ディレクトリを文字列としてdirectoryに取得 */
+char* get_dir (char* directory, int dir_length, FILE *fp)
 {
-        int i, ren;
-        ren = strlen(s1);
-        if ((n <= 0) || (ren <= 0) || (n > ren))
-                return(NULL);
-        for(i = 0; i < n-1; i++){
-                s1++;
+    directory = malloc(sizeof(char) * dir_length);
+    fread(directory, sizeof(char), dir_length, fp);
+    directory[dir_length - 1] =  '\0';
+    ebcdic2ascii(directory);
+    return directory;
+}
+
+/* データフィールド群の取得 */
+char* get_datafieldgroup (char* datafieldgroup, char label[], FILE* fp)
+{
+    int len;      /* データフィールド群の長さ */
+
+    len = get_length(label) - get_baseaddr(label);
+    datafieldgroup = malloc(sizeof(char) * (len + 1));
+    
+    /* データフィールド群の取得 */
+    fread(datafieldgroup, sizeof(char), len, fp);
+    datafieldgroup[len] = '\0';
+
+    return datafieldgroup;
+}
+
+/* エントリとデータフィールドを出力 */
+void print_data (struct entry e, struct datafield d)
+{
+    int i;
+    
+#if ANZAI == 0
+    if (strcmp(e.field, "001") == 0) {
+	printf("%s  %s\n", e.field, d.sub[0].data);
+    } else {
+	for( i = 0; i < d.num; i++) {
+	    printf("%s $%c %s\n", e.field, d.sub[i].id, d.sub[i].data);
+	}
+    }
+#endif
+    
+#if ANZAI == 1
+    if (strcmp(e.field, "001") == 0) {
+	printf("%s%s\n", e.field, d.sub[0].data);
+    } else {
+	for( i = 0; i < d.num; i++) {
+	    printf("%s$%c%s\n", e.field, d.sub[i].id, d.sub[i].data);
+	}
+    }
+#endif	    
+
+}
+
+ /* データフィールドを構造体として返す */
+struct datafield get_datafield (char* datafieldgroup, struct entry e)
+{
+    char* datafield_str;
+    struct datafield d;
+
+    /* データフィールドを文字列として取り出す */
+    datafield_str = malloc(sizeof(char) * e.len);
+    substr(datafield_str, datafieldgroup, e.addr, e.len - 1);
+
+    /* データフィールドを構造体として取得 */
+    if (strcmp(e.field, "001") == 0) {
+	/* 001フィールドの場合 */
+	d = get_001datafield(datafield_str);
+    } else {
+	/* 001フィールド以外の場合 */
+	d = get_otherdatafield(datafield_str, e);
+    }
+    free(datafield_str);
+    return d;
+}
+
+/* 001フィールドのデータフィールドの取得 */
+struct datafield get_001datafield (char datafield_str[])
+{
+    struct datafield d;
+
+    /* サブデータフィールドの数 */
+    d.num = 1;
+    
+    /* サブフィールド識別文字 （例: A,B,D,Xなど）   */
+    /* 注）サブフィールド識別文字はないので適当な値 */
+    d.sub[0].id = '1';
+    
+    /* データ部の長さ */
+    d.sub[0].datalen = 8;
+
+    /* データ部のモード （1:ASCII） */
+    d.sub[0].mode = 1;   
+
+    /* 実際のデータ （例: 20000001）*/
+    substr(d.sub[0].data, datafield_str, 0, 8);
+    ebcdic2ascii(d.sub[0].data);
+
+    return d;
+}
+
+/* 001フィールド以外のデータフィールド
+ *  （= サブデータフィールドを含むデータフィールド）の取得 */   
+struct datafield get_otherdatafield (char datafield_str[], struct entry e)
+{
+    int i;
+    struct datafield d; /* データフィールド */
+     
+    d.num = 0; /* サブデータフィールドの数 */
+    for (i =0; i < e.len; i++) {
+	if (datafield_str[i] == JPMARC_SF) {
+	    /* 各サブデータフィールドを取得 */
+	    d.sub[d.num] = get_subfield(i, datafield_str);
+	    d.num++;
+	}
+    }
+    return d;
+}
+
+/* サブデータフィールドの取得 */
+struct subdatafield get_subfield (int addr, char datafield_str[])
+{
+    char idbuf[BUF_SIZE];
+    char buf[BUF_SIZE];
+    struct subdatafield s; /* サブデータフィールド */
+
+    substr(idbuf, datafield_str, addr + 1, 5);
+    ebcdic2ascii(idbuf);
+
+    /* サブフィールド識別文字 （例: A,B,D,Xなど）   */
+    s.id = idbuf[0];
+
+    /* データ部の長さ */
+    substr(buf, idbuf, 1, 3);
+    s.datalen = atoi(buf);
+
+    /* データ部のモード （1:ASCII or 2:JIS） */
+    substr(buf, idbuf, 4, 1);
+    s.mode = atoi(buf);
+
+    /* データ（部） */
+    substr(s.data, datafield_str, addr + 6, s.datalen);
+    if ( s.mode == 1 ) { /* ASCIIだったら */
+	ebcdic2ascii(s.data);
+    } else if (s.mode == 2 ) { /* JISだったら */
+	kanji(s.data);
+    } else { /* どちらでもなかったら強制終了 */
+	printf("!!!!!! NO MODE !!!!!\n");
+	exit(EXIT_FAILURE);
+    }
+    return s;
+}
+
+/* 外字の処理をほどこし、
+ * JIS X 0208 漢字をエスケープコードを含めて返す。 */
+void  kanji (char str[])
+{
+    realchange(str, strlen(str)); /* 外字の処理 */
+    escape_kanji(str); /* JIS X 0208 漢字をエスケープコードを含める */
+}
+
+/* JIS X 0208 漢字をエスケープコードを含めて返す。 */
+void  escape_kanji (char str[])
+{
+    char buf[BUF_SIZE];
+    strcpy(buf, str);
+    sprintf(str, "%s%s%s", JISC6226_ESC, buf, ASCII_ESC);
+}
+
+/* str2 の head から len 文字目までを str1 にコピー */
+void substr (char str1[], char str2[], int head, int len)
+{
+    strncpy(str1, str2 + head, len);
+    str1[len] = '\0';
+}
+
+/* エントリを取得 */
+struct entry get_direntry (char* directory, int num)
+{
+    struct entry e; /* エントリ */
+    int addr; /* エントリの先頭位置 */
+    char entry[13], buf[BUF_SIZE];
+    
+    addr = 12 * num;
+
+    substr(entry, directory, addr, 12);
+
+    /* フィールド識別子 （例: 001, 245 など）*/
+    substr(e.field, entry, 0, 3);
+
+    /* フィールド長: データフィールドの長さ FS含む */
+    substr(buf, entry, 3, 4);
+    e.len = atoi(buf);
+    
+    /* フィールドの先頭文字の位置: 
+       データフィールド群の先頭からの相対位置 */
+    substr(buf, entry, 7, 5);
+    e.addr = atoi(buf);
+    
+    return e;
+	
+}
+
+/* 書誌レコード長を返す
+ * 書誌レコード長: レコードラベルの先頭からRSを含めた書誌レコードの長さ*/
+int get_length (char label[])
+{
+    char buf[BUF_SIZE];
+    substr(buf, label, 0, 5);
+    return atoi(buf);
+}
+
+static char e2a_table[] = {
+    '\000', '\001', '\002', '\003', '\004', '\005', '\006', '\007', 
+    '\010', '\011', '\012', '\013', '\014', '\015', '\016', '\017', 
+    '\020', '\021', '\022', '\023', '\024', '\025', '\026', '\027', 
+    '\030', '\031', '\032', '\033', '\034', '\035', '\036', '\037', 
+    '\040', '\041', '\042', '\043', '\044', '\045', '\046', '\047', 
+    '\050', '\051', '\052', '\053', '\054', '\055', '\056', '\057', 
+    '\060', '\061', '\062', '\063', '\064', '\065', '\066', '\067', 
+    '\070', '\071', '\072', '\073', '\074', '\075', '\076', '\077', 
+    ' ',    '\101', '\102', '\103', '\104', '\105', '\106', '\107', 
+    '\110', '\111', '[',    '.',    '<',    '(',    '+',    '!', 
+    '&',    '\121', '\122', '\123', '\124', '\125', '\126', '\127', 
+    '\130', '\131', ']',    '\\',    '*',    ')',    ';',    '^', 
+    '-',    '/',    '\142', '\143', '\144', '\145', '\146', '\147', 
+    '\150', '\151', '|',    ',',    '%',    '_',    '>',    '?', 
+    '\160', '\161', '\162', '\163', '\164', '\165', '\166', '\167', 
+    '\170', '\'',   ':',    '#',    '@',    '`',    '=',    '"', 
+    '\200', 'a',    'b',    'c',    'd',    'e',    'f',    'g', 
+    'h',    'i',    '\212', '\213', '\214', '\215', '\216', '\217', 
+    '\220', 'j',    'k',    'l',    'm',    'n',    'o',    'p', 
+    'q',    'r',    '\232', '\233', '\234', '\235', '\236', '\237', 
+    '\240', '-',    's',    't',    'u',    'v',    'x',    'w', 
+    'y',    'z',    '\252', '\253', '\254', '\255', '\256', '\257', 
+    '\260', '\261', '\262', '\263', '\264', '\265', '\266', '\267', 
+    '\270', '\271', '\272', '\273', '\274', '\275', '\276', '\277', 
+    '{',    'A',    'B',    'C',    'D',    'E',    'F',    'G', 
+    'H',    'I',    '\312', '\313', '\314', '\315', '\316', '\317', 
+    '}',    'J',    'K',    'L',    'M',    'N',    'O',    'P', 
+    'Q',    'R',    '\332', '\333', '\334', '\335', '\336', '\337', 
+    '$',    '\341', 'S',    'T',    'U',    'V',    'W',    'X', 
+    'Y',    'Z',    '\352', '\353', '\354', '\355', '\356', '\357', 
+    '0',    '1',    '2',    '3',    '4',    '5',    '6',    '7', 
+    '8',    '9',    '\372', '\373', '\374', '\375', '\376', '\377' };
+
+void ebcdic2ascii (char label[])
+{
+    int i, length;
+    length = strlen(label);
+    for (i = 0; i < length; i++) {
+	label[i] = e2a_table[(unsigned char)label[i]];
+    }
+}
+
+/* 外字辞書にある文字 → 該当文字, その他の外字 → REPLACE＿STR ,
+ * 制御文字 → "", "−" → "長音" の 処理
+ * 第一引数 str[]: エスケープシーケンスを含まない2バイトの文字列 */
+void realchange (char str[], int len)
+{
+    extern char *dict[];
+#if ANZAI == 1    
+    extern char *dictout[];
+#endif    
+#if ANZAI == 0
+    extern char *dictout2[];
+    char bbuf[BUF_SIZE];
+#endif    
+    char buf[BUF_SIZE];
+    char new[BUF_SIZE] = "";
+    int i, addr;
+
+    if ( (len % 2) != 0) {
+	printf("len:%d is 奇数です\n", len);
+	exit(EXIT_FAILURE);
+    }
+    for (i = 0; i < len; i = i + 2) {	
+	strncpy(buf, str + i, 2);
+	buf[i + 2] = '\0';
+	addr = search(buf, dict, GAIJINUM);
+	if ( addr != -1) { /* 外字辞書にある外字の処理 */
+#if ANZAI == 1	    
+	    strcat(new, dictout[addr]);
+#endif	    
+#if ANZAI == 0
+	    strcat(new, dictout2[addr]);
+	} else if( search_otergaiji(buf) != -1) {
+	    /* 外字辞書にない外字の処理 */
+	    strcat(new, REPLACE_STR); 
+	} else if ( (buf[0] == '\x1c') &&
+		    (buf[1] >= '\x4e' && buf[1] <= '\x53')) {
+	    /* 制御コードなので追加しない */
+	} else if (buf[0] =='\x21' && buf[1] == '\x5d') { /* もしマイナスならば */
+	    /* マイナスを長音に変更するため前の文字を取ってくる */
+	    strncpy(bbuf, str + i - 2, 2);
+	    bbuf[i] = '\0';
+	    if(( bbuf[0] == '\x24' || bbuf[0] == '\x25')
+	       && (bbuf[1] >= '\x21' && bbuf[1] <= '\x76')) {
+		/* もし前がカタカナもしくは平仮名だったら */
+		strcat(new, "\x21\x3c"); /* 長音に変更 */
+	    } else {
+		strcat(new, buf); /* そのままマイナスに */
+	    }		
+#endif	    
+	} else { /* 外字がなかったらそのまま追加 */
+	    strcat(new, buf);
+	}
+    }
+    strcpy(str, new);
+}
+
+/* その他の外字があるか判定 あれば1 なければ-1 */
+int search_otergaiji (char str[])
+{
+    if((str[0] >= '\x30' && str[0] <='\x7e')
+       && (str[1] >= '\xa1' && str[1] <= '\xfe')) {
+	return 1;
+    } else if ( (str[0] >= '\x29' && str[0] <='\x2f')
+		&& (str[1] >= '\x21' && str[1] <= '\x7e')) {
+	return 1;
+    } else if ( (str[0] == '\x22')
+		&& (str[1] >= '\x2f' && str[1] <= '\x68')) {
+	return 1;
+    } else {
+	return -1;
+    }
+}
+    
+/* keyが db にあれば その位置を返す*/
+int search (char key[], char *db[], int n)
+{
+    int left = 0, right = n - 1, mid;
+    int count = 0;
+    while(left <= right) {
+        count++;
+        mid = (left + right) / 2;
+        if (strcmp(key, db[mid]) == 0){
+            return(mid);
+        } else if (strcmp(key, db[mid]) < 0){
+            right = mid - 1;
+        } else {
+            left = mid + 1;
         }
-        return(s1);
+    }
+    return(-1);
 }
-
-void putcode(int s1)
-{
-	s1 = (s1 & 0x000000ff);
-	printf("{%x}", s1);
-}
-
-void putfield(char *s1, int m, char *tagtemp)
-{
-	int i, j, n, c, l, KANJI;
-	char s[1], *buf, *temp, *tagsfc;
-	n = 0; j = 0;
-	buf = (char *)malloc(sizeof(char)*4);
-	tagsfc = (char *)malloc(sizeof(char)*6);
-	if ((buf == NULL) || (tagsfc == NULL)) exit(1);
-	while(TRUE){	/* each subfield 1 loop */
-		strncpy(s, s1+n, 1);
-		strcpy(s+1, "\0");
-		c = (int)s[0];
-		if (c != UTC) {
-			puts("I cant find Subfield separator");
-			exit(1);
-			}
-		strncpy(s, s1+n+1, 1);
-		strcpy(s+1, "\0");
-		ebc2jis(s);
-		strcpy(tagsfc, tagtemp);
-		strcat(tagsfc, s);
-#if defined(USEGOLIST)
-		if (strstr(GOLISTTAG, tagsfc) != NULL) {
-			if (PRINTSFC)
-				printf(SFCFORM, s[0]);
-			else if (PRINTTAGSFC)
-				printf(TAGSFCFORM, tagtemp, s[0]);
-		}
-#endif
-#if !defined(USEGOLIST)
-		if (PRINTSFC)
-			printf(SFCFORM, s[0]);
-		else if (PRINTTAGSFC)
-			printf(TAGSFCFORM, tagtemp, s[0]);
-#endif
-		strncpy(buf, s1+n+2, 3);
-		strcpy(buf+3, "\0");
-		ebc2jis(buf);
-		l = atoi(buf);
-		strncpy(s, s1+n+5, 1);
-		strcpy(s+1, "\0");
-		ebc2jis(s);
-		i = atoi(s);
-		if (i == 1) KANJI = 0;
-		else if (i == 2) KANJI = 1;
-		else {
-			puts("I cant distinguish Kanji / Alphabetical.");
-			exit(1);
-			}
-		temp = (char *)malloc(sizeof(char)*l+1);
-		if (temp == NULL) exit(1);
-		strncpy(temp, s1+n+6, l);
-		strcpy(temp+l, "\0");
-#if defined(USEGOLIST)
-		if (strstr(GOLISTTAG, tagsfc) != NULL) {
-			j++;
-			if (KANJI == 0) {
-				ebc2jis(temp);
-				printf("%s",temp);
-				}
-			else putkanji(temp, l);
-			printf(SUBFIELD_T);
-		}
-#endif
-#if !defined(USEGOLIST)
-			j++;
-			if (KANJI == 0) {
-				ebc2jis(temp);
-				printf("%s",temp);
-				}
-			else putkanji(temp, l);
-			printf(SUBFIELD_T);
-#endif
-		free(temp);
-		n = n + l + 6;
-		if (n == m-1) break;
-		}
-	free(buf);
-	free(tagsfc);
-	if (j != 0) printf(FIELD_T);
-	strncpy(s, s1+n, 1);
-	strcpy(s+1, "\0");
-	c = (int)s[0];
-	if (c != FTC) {
-		puts("WARNING - no Field Terminator !");
-		exit(1);
-	}
-}
-
-void putkanji(char *st, int len)
-/* スイッチで追加文字への対応は一応可能であるが、面倒である */
-/* 配列変数の利用も考えられるが、どちらにしても面倒である */ 
-{
-	int kanji, kanf, kanb, i;
-	kanjishift();
-	for(i = 0; i < len /2; i++){
-	kanf = (int)(*(st+(i*2)));
-	kanf = (kanf & 0x000000ff);
-	kanb = (int)(*(st+(i*2)+1));
-	kanb = (kanb & 0x000000ff);
-	kanji = kanf * 256 + kanb;
-	switch(kanji){
-	case 0x2a24:
-		puteuc("Ａａ");
-		break;
-	case 0x2a2b:
-		puteuc("Ｅｅ");
-		break;
-	case 0x2a2f:
-		puteuc("Ｉｉ");
-		break;
-	case 0x2a34:
-		puteuc("Ｏｏ");
-		break;
-	case 0x2a39:
-		puteuc("Ｕｕ");
-		break;
-	case 0x2a43:
-		puteuc("ａａ");
-		break;
-	case 0x2a50:
-		puteuc("ｅｅ");
-		break;
-	case 0x2a56:
-		puteuc("ｉｉ");
-		break;
-	case 0x2a5e:
-		puteuc("ｏｏ");
-		break;
-	case 0x2a6c:
-		puteuc("ｕｕ");
-		break;
-	case 0x2231:
-		puteuc("／");
-		break;
-	default:
-		putchar(kanf);
-		putchar(kanb);
-	}
-	}
-	ascshift();
-}
-
-void puteuc(char *st)
-{
-	int i, a, b, c;
-	for(i = 0; i < (strlen(st)/2); i++){
-		a = (int)(*(st+(i*2)));
-		b = (int)(*(st+(i*2)+1));
-        	a = (a & 0x000000ff);
-		b = (b & 0x000000ff); 
-/*
-		c = a * 256 + b;
-		c = euc2jis(c);
-		a = c / 256 ;
-		b = c - 256 * a;
-*/
-	a = a - 0x80;
-	b  = b -0x80;
-		putchar(a);
-		putchar(b);
-		}
-}
-
-/*
-
-        11, April       第１版完成
-                        ＥＢＣＤＩＣと漢字の出力をシフトコードでわける。
-        18, April       第２版完成
-                        タグをリーダーの情報からつける
-         6, May         ＥＢＣＤＩＣ表をＪＭＡＲＣマニュアルの付録のものと
-                        差し換える。
-         7, May         追加文字への対応開始
-                        現時点でローマ字への伸ばす音のみに対処
-        12, May         引き数への対処
-
-	 1, June	第３版作成開始
-			ディレクトリとの関連で読み込み手続きを抜本改革開始
-	 6, June	ＥＵＣ漢字をＪＩＳ漢字として出力する関数を製作し、
-			プログラムに組み込む。
-	24, June	ダブルスラッシュを／で翻字するように処理を変更。
-
-*/
