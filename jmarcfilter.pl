@@ -1,6 +1,6 @@
 #!/usr/local/bin/perl -w
 #
-# $ID: $
+# $Id$
 #
 
 use strict;
