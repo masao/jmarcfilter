@@ -35,15 +35,23 @@ int main (int argc, char* argv[])
 	exit(EXIT_FAILURE);
     }
     while(1){
-	    
-	/*ゴミを取ってくる*/
-	if(fread(gomi,sizeof(char), GOMI_LENGTH, fp)== NULL){
+	/*レコードセパレータの前にノイズがあるので読み飛ばす*/
+	while(1){
+	    if(fread((char*)&in,sizeof(char), 1, fp)== NULL){
+		break;
+	    }
+	    if(in == '0' || in =='1'){
+		break;
+	    }
+	}
+	/*ゴミの下4桁を取ってくる*/
+	if(fread(gomi,sizeof(char), GOMI_LENGTH-1, fp)== NULL){
 	    break;
 	}
 	igomi = atoi(gomi);
-	if(igomi > 10000) {
+	/*if(igomi > 10000) {
 	    igomi = igomi - 10000;
-	}
+	    }*/
 	count=5;
 	while(1) {
 	    count++;
