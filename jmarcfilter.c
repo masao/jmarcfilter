@@ -9,7 +9,7 @@
 
 #define BUF_SIZE 1024
 #define LABEL_LENGTH 24
-#define N 100
+#define SUBFIELD_NUM 256  /* サブフィールドの数 */
 #define JPMARC_RS '\x1d' /* レコードセパレータ */
 #define JPMARC_FS '\x1e' /* フィールドセパレータ */
 #define JPMARC_SF '\x1f' /* サブフィールド識別子の最初の文字 */
@@ -40,7 +40,7 @@ struct subdatafield {
 /* データフィールド */
 struct datafield {
     int num; /* データフィールド内にあるサブデータフィールドの数 */
-    struct subdatafield sub[N]; /* サブデータフィールドの配列 */
+    struct subdatafield sub[SUBFIELD_NUM]; /* サブデータフィールドの配列 */
 };
 
 /* ディレクトリ */
@@ -286,6 +286,10 @@ struct datafield get_otherdatafield (char datafield_str[], struct entry e)
 	    /* 各サブデータフィールドを取得 */
 	    d.sub[d.num] = get_subfield(i, datafield_str);
 	    d.num++;
+	}
+	if(d.num > SUBFIELD_NUM -1){
+	    fprintf(stderr, "警告：サブフィールドの数が%dを越しています。\n",SUBFIELD_NUM);
+	    break;
 	}
     }
     return d;
