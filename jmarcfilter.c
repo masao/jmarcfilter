@@ -9,7 +9,7 @@
 
 #define BUF_SIZE 1024
 #define LABEL_LENGTH 24
-#define N 30
+#define N 100
 #define JPMARC_RS '\x1d' /* レコードセパレータ */
 #define JPMARC_FS '\x1e' /* フィールドセパレータ */
 #define JPMARC_SF '\x1f' /* サブフィールド識別子の最初の文字 */
