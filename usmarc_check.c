@@ -64,7 +64,7 @@ int main (int argc, char* argv[])
 	    }
 	}
     }
-    printf("recort count = %d\n", rec_count);
+    printf("%s:record count = %d\n", argv[1],rec_count);
     fclose(fp);
     exit(EXIT_SUCCESS);
 }

@@ -8,26 +8,19 @@
 #include <strings.h>
 #include <string.h>
 
-#define GOMI_LENGTH 5
+#define N 2043 /* データの最大バイト数（2043 = 2048 - 5） */
 
 #define MARC_RS '\x1d' /* レコードセパレータ */
 #define MARC_FS '\x1e' /* フィールドセパレータ */
 #define MARC_SF '\x1f' /* サブフィールド識別子の最初の文字 */
 
-void substr (char str1[], char str2[], int head, int len);
 int main (int argc, char* argv[])
 {
     FILE *fp, *wfp;
-    char in;
-    char gomi[GOMI_LENGTH+1];
-    int igomi;
-    int count;
-    int gomicount;
-    int gominum;
-
-    /* gomiの初期化*/
-    gomi[GOMI_LENGTH] = '\0';
-
+    char flag; /*データの長さのフラグ 0|1|2|3 のどれか*/
+    char clen[5]; /* データの長さ */
+    int len; /* データの長さ */
+    char data[N]; /* データ */
     if (argc != 3) {
         fprintf(stderr,"USAGE: %s infile outfile \n", argv[0]);
         exit(EXIT_FAILURE);
@@ -42,70 +35,33 @@ int main (int argc, char* argv[])
 	exit(EXIT_FAILURE);
     }
     while(1){
-	/*レコードセパレータの前にノイズがあるので読み飛ばす*/
 	while(1){
-	    if(fread((char*)&in,sizeof(char), 1, fp)== NULL){
+	    /* flag = '0|1|2|3' を 取ってくる（1バイト） */
+	    if(fread((char*)&flag,sizeof(char), 1, fp)== NULL){
 		break;
 	    }
-	    if(in == '0' || in =='1'){
-		printf("\ngomi:%c",in);
+	    /* ノイズは読み飛ばす */
+	    if(flag == '0' | flag == '1' | flag == '2' | flag == '3'){
 		break;
 	    }
 	}
-	/*ゴミの下4桁を取ってくる*/
-	if(fread(gomi,sizeof(char), GOMI_LENGTH-1, fp)== NULL){
+	/*データの長さを取ってくる（4バイト）*/
+	if(fread(clen,sizeof(char), 4, fp)== NULL){
 	    break;
 	}
-	gomi[GOMI_LENGTH-1] = '\0';
-	printf("%s:",gomi);
-	igomi = atoi(gomi);
-	gominum = 1;
-	/*if(igomi > 10000) {
-	    igomi = igomi - 10000;
-	    }*/
-	count=5;
-	gomicount=0;
-	while(1) {
-	    count++;
-	    if(fread((char*)&in,sizeof(char), 1, fp)== NULL){
-		break;
-	    }
-	    /* labelのレコードの長さを出力 */
-	    if(count <= 10) {
-		printf("%c",in);
-		if(count == 10){
-		    printf(":");
-		}
-	    }
-	    if(!(igomi < count && count <= igomi+5) ){
-		fprintf(wfp,"%c", in);
-	    }
-	    else{/*ゴミを出力*/
-		gomi[gomicount++] = in;
-		printf("%c",in);
-		if(gomicount == 5) {
-		    char tmp[5];
-		    substr(tmp,gomi,1,4);
-		    igomi=igomi+atoi(tmp);
-		    printf("(%d)",igomi);
-		    gomicount=0;
-		    gominum++;
-		}
-	    }
-	    /*もしレコードの終りだったら*/
-	    if(in == MARC_RS){
-		printf("gominum=%d",gominum);
-		break;
-	    }
+	clen[4] = '\0';
+	
+	/* データのバイト数を求める */
+	/* flag+データ長のバイト数分（5バイト）を引くと求まる */
+	len = atoi(clen) - 5;
+
+	/* データを取ってくる （lenバイト）*/
+	if(fread(data,sizeof(char), len, fp)== NULL){
+	    break;
 	}
+	fwrite(data,sizeof(char), len, wfp);
     }
-    printf("\n");
     fclose(fp);
     fclose(wfp);
     exit(EXIT_SUCCESS);
-}
-void substr (char str1[], char str2[], int head, int len)
-{
-    strncpy(str1, str2 + head, len);
-    str1[len] = '\0';
 }
