@@ -14,23 +14,29 @@
 #define MARC_FS '\x1e' /* フィールドセパレータ */
 #define MARC_SF '\x1f' /* サブフィールド識別子の最初の文字 */
 
+void substr (char str1[], char str2[], int head, int len);
 int main (int argc, char* argv[])
 {
-    FILE *fp;
+    FILE *fp, *wfp;
     char in;
     char gomi[GOMI_LENGTH+1];
     int igomi;
     int count;
+    int gomicount;
 
     /* gomiの初期化*/
     gomi[GOMI_LENGTH] = '\0';
 
-    if (argc != 2) {
-        printf("USAGE: %s file \n", argv[0]);
+    if (argc != 3) {
+        fprintf(stderr,"USAGE: %s file \n", argv[0]);
         exit(EXIT_FAILURE);
     }
     /*ファイルのオープン*/
     if ((fp = fopen(argv[1], "r")) == NULL) {
+	perror("fopen");
+	exit(EXIT_FAILURE);
+    }
+    if ((wfp = fopen(argv[2], "w")) == NULL) {
 	perror("fopen");
 	exit(EXIT_FAILURE);
     }
@@ -44,22 +50,44 @@ int main (int argc, char* argv[])
 		break;
 	    }
 	}
+	printf("\ngomi:%c",in);
 	/*ゴミの下4桁を取ってくる*/
 	if(fread(gomi,sizeof(char), GOMI_LENGTH-1, fp)== NULL){
 	    break;
 	}
+	gomi[GOMI_LENGTH-1] = '\0';
+	printf("%s:",gomi);
 	igomi = atoi(gomi);
 	/*if(igomi > 10000) {
 	    igomi = igomi - 10000;
 	    }*/
 	count=5;
+	gomicount=0;
 	while(1) {
 	    count++;
 	    if(fread((char*)&in,sizeof(char), 1, fp)== NULL){
 		break;
 	    }
+	    /* labelのレコードの長さを出力 */
+	    if(count <= 10) {
+		printf("%c",in);
+		if(count == 10){
+		    printf(":");
+		}
+	    }
 	    if(!(igomi < count && count <= igomi+5) ){
-		printf("%c", in);
+		fprintf(wfp,"%c", in);
+	    }
+	    else{/*ゴミを出力*/
+		gomi[gomicount++] = in;
+		printf("%c",in);
+		if(gomicount == 5) {
+		    char tmp[5];
+		    substr(tmp,gomi,1,4);
+		    igomi=igomi+atoi(tmp);
+		    printf("(%d)",igomi);
+		    gomicount=0;
+		}
 	    }
 	    /*もしレコードの終りだったら*/
 	    if(in == MARC_RS){
@@ -67,6 +95,13 @@ int main (int argc, char* argv[])
 	    }
 	}
     }
+    printf("\n");
     fclose(fp);
+    fclose(wfp);
     exit(EXIT_SUCCESS);
+}
+void substr (char str1[], char str2[], int head, int len)
+{
+    strncpy(str1, str2 + head, len);
+    str1[len] = '\0';
 }
