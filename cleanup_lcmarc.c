@@ -23,12 +23,13 @@ int main (int argc, char* argv[])
     int igomi;
     int count;
     int gomicount;
+    int gominum;
 
     /* gomiの初期化*/
     gomi[GOMI_LENGTH] = '\0';
 
     if (argc != 3) {
-        fprintf(stderr,"USAGE: %s file \n", argv[0]);
+        fprintf(stderr,"USAGE: %s infile outfile \n", argv[0]);
         exit(EXIT_FAILURE);
     }
     /*ファイルのオープン*/
@@ -47,10 +48,10 @@ int main (int argc, char* argv[])
 		break;
 	    }
 	    if(in == '0' || in =='1'){
+		printf("\ngomi:%c",in);
 		break;
 	    }
 	}
-	printf("\ngomi:%c",in);
 	/*ゴミの下4桁を取ってくる*/
 	if(fread(gomi,sizeof(char), GOMI_LENGTH-1, fp)== NULL){
 	    break;
@@ -58,6 +59,7 @@ int main (int argc, char* argv[])
 	gomi[GOMI_LENGTH-1] = '\0';
 	printf("%s:",gomi);
 	igomi = atoi(gomi);
+	gominum = 1;
 	/*if(igomi > 10000) {
 	    igomi = igomi - 10000;
 	    }*/
@@ -87,10 +89,12 @@ int main (int argc, char* argv[])
 		    igomi=igomi+atoi(tmp);
 		    printf("(%d)",igomi);
 		    gomicount=0;
+		    gominum++;
 		}
 	    }
 	    /*もしレコードの終りだったら*/
 	    if(in == MARC_RS){
+		printf("gominum=%d",gominum);
 		break;
 	    }
 	}
