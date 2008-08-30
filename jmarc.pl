@@ -706,9 +706,8 @@ EBCDICコードをASCIIに変換する。
 
 =back
 
-=head1 COPYRIGHT
+=head1 AUTHOR
 
-Copyright (C) 2000 Masao Takaku <masao@ulis.ac.jp>.
-All rights reserved.
+高久 雅生 E<lt>tmasao@acm.orgE<gt>
 
 =cut
